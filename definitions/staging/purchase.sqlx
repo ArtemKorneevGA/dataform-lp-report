@@ -1,0 +1,23 @@
+config {
+  type: "incremental",
+  uniqueKey:['date','event_id'],
+  schema: "dataform_staging",
+  tags: ["ga4_obfuscated_sample_ecommerce"],
+  bigquery: {
+    partitionBy: "date",
+  }
+}
+
+SELECT 
+  ${helpers.getEventId()},
+  ${helpers.getSessionId()},
+  ${helpers.getDate()},
+  TIMESTAMP_MICROS(event_timestamp) as event_timestamp,
+  user_id,
+  user_pseudo_id,
+  ${helpers.getEventParam('page_location')},
+FROM
+  ${ when(incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
+  ${ when(!incremental(), `${ctx.ref(constants.GA4_DATABASE, dataform.projectConfig.vars.GA4_DATASET, "events_*")}` )}
+WHERE
+event_name = 'purchase' 

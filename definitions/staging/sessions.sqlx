@@ -1,0 +1,106 @@
+config {
+  type: "incremental",
+  schema: "dataform_staging",
+  tags: ["ga4_obfuscated_sample_ecommerce"],
+  uniqueKey: ["date","session_id"],
+  bigquery: {
+    partitionBy: "date",
+  }
+}
+
+with events as (
+  select
+    ${helpers.getSessionId()},
+    ${helpers.getDate()},
+    TIMESTAMP_MICROS(event_timestamp) as event_timestamp,
+
+    geo.country as country,
+    user_id,
+    user_pseudo_id,
+    device.category as device_category,
+    device.language as language,
+    
+    ${helpers.getEventParam('session_engaged')},
+    ${helpers.getEventParam('page_location')},
+    ${helpers.getEventParam('page_referrer')},
+    ${helpers.getEventParam('source')},
+    ${helpers.getEventParam('medium')},
+    ${helpers.getEventParam('campaign')},
+    ${helpers.getEventParam('gclid')},
+    ${helpers.getEventParam('content')},
+    ${helpers.getEventParam('term')},
+    ${helpers.getEventParam('ignore_referral')},
+
+  from
+     ${ when(incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
+    --  ${ when(!incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
+    ${ when(!incremental(), `${ctx.ref(constants.GA4_DATABASE, dataform.projectConfig.vars.GA4_DATASET, "events_*")}` )}
+),
+
+sessions_step1 as (
+  select
+    session_id,
+    ARRAY_AGG(user_pseudo_id IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as user_pseudo_id,
+    ARRAY_AGG(user_id IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as user_id,
+    ARRAY_AGG(page_location IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as session_page_location,
+    ARRAY_AGG(page_referrer IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as session_page_referrer,
+    ARRAY_AGG(source IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as source,
+    ARRAY_AGG(medium IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as medium,
+    ARRAY_AGG(campaign IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as campaign,
+    ARRAY_AGG(gclid IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as gclid,
+    ARRAY_AGG(content IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as content,
+    ARRAY_AGG(term IGNORE NULLS ORDER BY event_timestamp LIMIT 1)[SAFE_OFFSET(0)] as term,
+    min(date) as date,
+    ANY_VALUE(device_category) as device_category,
+    ANY_VALUE(language) as language,
+    ANY_VALUE(country) as country,
+    min(event_timestamp) as session_start,
+    max(event_timestamp) as session_end,
+    if(sum(cast(session_engaged as INT64)) > 0, 1, 0) as is_engaged_session,
+  from events
+  where session_id is not null
+  group by session_id
+),
+
+sessions_step2 as (
+select
+* except(source,medium,campaign,gclid,content,term),
+ struct(
+  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(direct)', source ) as source,
+  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(none)', medium ) as medium,
+  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(none)', campaign ) as campaign,
+  gclid,
+  content,
+  term
+ ) as bq_qp,
+from sessions_step1
+),
+
+last_channel_table as (
+  select
+    *, 
+    CASE
+      WHEN coalesce(bq_qp.source, bq_qp.medium, bq_qp.campaign) is not null THEN struct(bq_qp.source as source, bq_qp.medium as medium, ifnull(bq_qp.campaign,'not set') as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'google\.') THEN struct('google' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'facebook\.|instagram\.') THEN struct('facebook,instagram' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'linkedin\.') THEN struct('linkedin' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'bing\.') THEN struct('bing' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'tiktok\.') THEN struct('tiktok' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' THEN struct(bq_qp.source as source, 'referral' as medium, 'not set' as campaign)
+      ELSE struct('(direct)' as source, '(none)' as medium, 'none' as campaign)
+    END as last_channel_info
+  from sessions_step2  
+
+)
+
+
+select 
+  * except (session_page_location),
+  struct(
+    session_page_location as url,
+    lower(net.host(session_page_location)) as host,
+    ${ when(incremental(), `lower(REGEXP_EXTRACT(session_page_location, r'^(?:(?:[^:\\\\/?#]+):)?(?:\\\\/\\\\/(?:[^\\\\/?#]*))?([^?#]*)(?:\\\\?(?:[^#]*))?(?:#(?:.*))?')) as path`)}
+    ${ when(!incremental(),`lower(REGEXP_EXTRACT(session_page_location, r'^(?:(?:[^:\\/?#]+):)?(?:\\/\\/(?:[^\\/?#]*))?([^?#]*)(?:\\?(?:[^#]*))?(?:#(?:.*))?')) as path`)}
+  ) as session_page_location,
+  ${helpers.getDefaultChannelGroup()},
+from last_channel_table 

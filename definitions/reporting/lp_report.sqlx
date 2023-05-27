@@ -1,0 +1,68 @@
+config {
+  type: "table",
+  schema: "dataform_reporting",
+  tags: ["ga4_obfuscated_sample_ecommerce"],
+  bigquery: {
+    partitionBy: "date",
+  }
+}
+
+with 
+session_page_view_tbl as (
+select
+  session_id,
+  count(1) as pvs,
+FROM  ${ref('page_view')} 
+group by 1
+),
+
+page_view_time_tbl as (
+select
+  session_id,
+  page_location.host as host,
+  page_location.path as path,
+  sum(1) as time_on_page,
+FROM ${ref('page_view')}
+group by 1,2,3
+),
+
+purchase_tbl as (
+select
+  session_id,
+  count(1) as purchases,
+FROM  ${ref('purchase')} 
+group by 1
+),
+
+
+report_tbl as(
+SELECT 
+  session_page_location.host as host,
+  session_page_location.path  as path,
+  s.date,
+  s.last_channel_info.source,
+  s.last_channel_info.medium,
+  s.last_channel_info.campaign,
+  s.default_channel_group,
+  s.country,
+  count(1) as sessions,
+  ifnull(sum(is_engaged_session),0) as engaged_sessions,
+  count(distinct s.user_pseudo_id) as users,
+  sum(timestamp_diff(session_end, session_start, SECOND)) as sum_session_duration_sec,
+  ifnull(sum(p.pvs),0) as sum_page_views,
+  ifnull(sum(time_on_page),0) as sum_time_on_landing_page,
+  ifnull(sum(purchases),0) as sum_purchases,
+FROM ${ref('sessions')} s
+left join session_page_view_tbl p on p.session_id = s.session_id 
+left join page_view_time_tbl t on t.session_id = s.session_id and t.host = s.session_page_location.host and t.path = s.session_page_location.path
+left join purchase_tbl pu on pu.session_id = s.session_id  
+group by 1,2,3,4,5,6,7,8
+)
+
+select
+*
+from report_tbl
+
+
+
+

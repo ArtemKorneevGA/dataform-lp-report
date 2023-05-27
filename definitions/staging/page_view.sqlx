@@ -1,0 +1,45 @@
+config {
+  type: "incremental",
+  uniqueKey:['date','event_id'],
+  schema: "dataform_staging",
+  tags: ["ga4_obfuscated_sample_ecommerce"],
+  bigquery: {
+    partitionBy: "date",
+  }
+}
+
+
+with page_views as (
+SELECT 
+  ${helpers.getEventId()},
+  ${helpers.getSessionId()},
+  ${helpers.getDate()},
+  TIMESTAMP_MICROS(event_timestamp) as event_timestamp,
+  user_id,
+  user_pseudo_id,
+  ${helpers.getEventParam('page_location')},
+  ${helpers.getEventParam('page_referrer')},
+  FROM
+  ${ when(incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
+  ${ when(!incremental(), `${ctx.ref(constants.GA4_DATABASE, dataform.projectConfig.vars.GA4_DATASET, "events_*")}` )}
+  WHERE
+  event_name = 'page_view' 
+)
+
+
+select
+  pv.* except(page_location),
+  struct (
+    page_location as url,
+    lower(net.host(page_location)) as host,
+    ${ when(incremental(), `lower(REGEXP_EXTRACT(page_location, r'^(?:(?:[^:\\\\/?#]+):)?(?:\\\\/\\\\/(?:[^\\\\/?#]*))?([^?#]*)(?:\\\\?(?:[^#]*))?(?:#(?:.*))?')) as path`)}
+    ${ when(!incremental(),`lower(REGEXP_EXTRACT(page_location, r'^(?:(?:[^:\\/?#]+):)?(?:\\/\\/(?:[^\\/?#]*))?([^?#]*)(?:\\?(?:[^#]*))?(?:#(?:.*))?')) as path`)}
+  ) as page_location,
+  DATETIME_DIFF(
+    ifnull(lead (pv.event_timestamp) OVER (PARTITION BY pv.session_id ORDER BY pv.event_timestamp ASC), s.session_end),
+    event_timestamp,
+    SECOND
+  ) as time_on_page,
+from page_views pv 
+left join ${ref('sessions')} s using (session_id, date)
+where session_id is not null

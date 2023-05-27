@@ -1,0 +1,12 @@
+{
+  "defaultSchema": "dataform",
+  "assertionSchema": "dataform_assertions",
+  "warehouse": "bigquery",
+  "defaultDatabase": "dataform-387905",
+  "defaultLocation": "US",
+  "vars": {
+    "GA4_TABLE": "events_20210131",
+    "GA4_DATASET": "ga4_obfuscated_sample_ecommerce"
+  }
+}
+    
