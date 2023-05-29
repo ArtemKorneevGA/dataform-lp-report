@@ -29,12 +29,10 @@ with events as (
     ${helpers.getEventParam('gclid')},
     ${helpers.getEventParam('content')},
     ${helpers.getEventParam('term')},
-    ${helpers.getEventParam('ignore_referral')},
 
   from
-     ${ when(incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
-    --  ${ when(!incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
     ${ when(!incremental(), `${ctx.ref(constants.GA4_DATABASE, dataform.projectConfig.vars.GA4_DATASET, "events_*")}` )}
+    ${ when(incremental(), `${ref(dataform.projectConfig.vars.GA4_DATASET, dataform.projectConfig.vars.GA4_TABLE)}` )}
 ),
 
 sessions_step1 as (
@@ -66,9 +64,9 @@ sessions_step2 as (
 select
 * except(source,medium,campaign,gclid,content,term),
  struct(
-  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(direct)', source ) as source,
-  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(none)', medium ) as medium,
-  if(medium = 'referral' and source in ('tagassistant.google.com', 'shop.googlemerchandisestore.com','googlemerchandisestore.com','www.googlemerchandisestore.com'), '(none)', campaign ) as campaign,
+  if(medium = 'referral' and source in ('tagassistant.google.com', ${constants.SELF_REFERRER}), '(direct)', source ) as source,
+  if(medium = 'referral' and source in ('tagassistant.google.com', ${constants.SELF_REFERRER}), '(none)', medium ) as medium,
+  if(medium = 'referral' and source in ('tagassistant.google.com', ${constants.SELF_REFERRER}), '(none)', campaign ) as campaign,
   gclid,
   content,
   term
@@ -81,11 +79,12 @@ last_channel_table as (
     *, 
     CASE
       WHEN coalesce(bq_qp.source, bq_qp.medium, bq_qp.campaign) is not null THEN struct(bq_qp.source as source, bq_qp.medium as medium, ifnull(bq_qp.campaign,'not set') as campaign)
+      WHEN bq_qp.gclid is not null THEN struct('google' as source, 'cpc' as medium, ifnull(bq_qp.campaign,'not set') as campaign)
       WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'google\.') THEN struct('google' as source, 'organic' as medium, 'not set' as campaign)
-      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'facebook\.|instagram\.') THEN struct('facebook,instagram' as source, 'organic' as medium, 'not set' as campaign)
-      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'linkedin\.') THEN struct('linkedin' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'facebook\.|instagram\.') THEN struct('facebook' as source, 'social' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'linkedin\.') THEN struct('linkedin' as source, 'social' as medium, 'not set' as campaign)
       WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'bing\.') THEN struct('bing' as source, 'organic' as medium, 'not set' as campaign)
-      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'tiktok\.') THEN struct('tiktok' as source, 'organic' as medium, 'not set' as campaign)
+      WHEN bq_qp.medium = 'referral' and REGEXP_CONTAINS(bq_qp.source, r'tiktok\.') THEN struct('tiktok' as source, 'social' as medium, 'not set' as campaign)
       WHEN bq_qp.medium = 'referral' THEN struct(bq_qp.source as source, 'referral' as medium, 'not set' as campaign)
       ELSE struct('(direct)' as source, '(none)' as medium, 'none' as campaign)
     END as last_channel_info

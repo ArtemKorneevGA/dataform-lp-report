@@ -1,0 +1,9 @@
+config {
+  type: "table",
+  schema: "dataform_staging",
+}
+
+select
+*
+FROM ${ref('test1')}
+
