@@ -1,0 +1,17 @@
+config {
+  type: "table",
+  schema: "dataform_staging",
+}
+
+select
+ event_date,
+ count(1) as page_views,
+FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_20210131`
+where event_name = 'page_view'
+group by 1
+
+
+-- FROM ${ref('events_20210131')}
+-- FROM ${ref(dataform.projectConfig.vars.GA4_TABLE)}
+-- FROM ${ref('events_*')}
+
